@@ -1,0 +1,48 @@
+---
+alwaysApply: true
+---
+
+# No Revision Residue — Do Not Leak Conversation History into Deliverables
+
+Do NOT leave revision residue in code, documentation, comments, or any other deliverables.
+
+Revision residue is leftover wording from the revision process itself — references to previous versions, rejected alternatives, or conversation history — that has no place in the final output.
+
+## Example (bad)
+
+Before edit:
+```
+A()
+```
+
+After edit (BAD — leaks history):
+```
+# changed from A() to B() because A() is bad
+B()
+```
+
+Or (BAD — leaks history):
+```
+# doing B() instead of A()
+B()
+```
+
+## Why it is bad
+
+- Code reviewers seeing only the final version are confused about where `A()` comes from. They were not part of your conversation with the user.
+- It clutters the deliverable with transient context that becomes stale immediately.
+- It signals a justification to the user ("look, I listened") instead of simply delivering correct work.
+
+## What to do instead
+
+Just deliver the final state, with no trace of the revision:
+```
+B()
+```
+
+## Rules
+
+- Do not leak conversation history into code, documentation, comments, commit messages, PR descriptions, or any other deliverables.
+- No "changed from X to Y", "instead of X", "previously Y", "now using Y", "updated to Y", "fixed by using Y", or equivalent narration.
+- Leave the final deliverables in a state that is acceptable in general, as if no prior revision ever happened.
+- Your goal is not to please the user or prove you made a change. Your goal is to deliver work with quality.
