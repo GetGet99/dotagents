@@ -1,4 +1,4 @@
-"""Tests for scripts/compile_rules.py."""
+"""Tests for scripts/compile.py."""
 
 from __future__ import annotations
 
@@ -11,17 +11,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import compile_rules  # noqa: E402
-from compile_rules import (  # noqa: E402
+import compile as compile_mod  # noqa: E402
+from compile import (  # noqa: E402
     CompileConfig,
     applies_to,
     demote_headings,
     load_config,
     load_rules,
+    load_skills,
     normalize_globs,
     parse_rule,
+    parse_skill,
     render_agents_md,
+    run,
+    skill_applies_to,
     sync_cursor_symlinks,
+    sync_skill_links,
     write_if_changed,
 )
 
@@ -90,8 +95,8 @@ def make_rule(
     globs: tuple[str, ...] = (),
     description: str | None = "desc",
     body: str = "# Title\n\ncontent",
-) -> compile_rules.Rule:
-    return compile_rules.Rule(
+) -> compile_mod.Rule:
+    return compile_mod.Rule(
         slug=slug,
         source_path=tmp_path / f"{slug}.mdc",
         body=body,
@@ -222,13 +227,19 @@ def test_disabled_platform_touches_nothing(tmp_path: Path) -> None:
     config = CompileConfig(
         repo_root=tmp_path,
         rules_dir=tmp_path / "rules",
+        skills_dir=tmp_path / "skills",
         enabled=frozenset({"opencode"}),
         opencode_out=tmp_path / "autogen-opencode.md",
         codex_out=None,
         cursor_rules_dir=None,
+        agents_skills_dir=tmp_path / "agents-skills",
+        opencode_skills_dir=tmp_path / "opencode-skills",
+        cursor_skills_dir=None,
+        codex_skills_dir=None,
     )
     assert config.codex_out is None
     assert config.cursor_rules_dir is None
+    assert config.codex_skills_dir is None
 
 
 def test_load_config_defaults_to_all(
@@ -268,3 +279,169 @@ def test_load_config_env_and_cli(
     config3 = load_config(tmp_path, cli_platforms="all")
     assert config3.enabled == frozenset({"cursor", "opencode", "codex"})
     _ = os.environ.get("DOTAGENTS_PLATFORMS")
+
+
+# --- skills ---------------------------------------------------------------
+
+
+def write_skill(
+    tmp_path: Path,
+    name: str,
+    frontmatter: str,
+    body: str = "# Skill\n\ncontent",
+) -> Path:
+    d = tmp_path / name
+    d.mkdir(exist_ok=True)
+    (d / "SKILL.md").write_text(f"---\n{frontmatter}\n---\n\n{body}\n", encoding="utf-8")
+    return d
+
+
+def test_parse_skill_platforms(tmp_path: Path) -> None:
+    d = write_skill(
+        tmp_path,
+        "create-pet",
+        "platforms:\n- codex\nname: create-pet\ndescription: make a pet",
+    )
+    skill = parse_skill(d, tmp_path)
+    assert skill.name == "create-pet"
+    assert skill.platforms == ("codex",)
+    assert skill_applies_to(skill, "codex")
+    assert not skill_applies_to(skill, "opencode")
+
+
+def test_parse_skill_universal_without_platforms(tmp_path: Path) -> None:
+    d = write_skill(tmp_path, "s", "name: s\ndescription: d")
+    skill = parse_skill(d, tmp_path)
+    assert skill.platforms is None
+
+
+def test_parse_skill_all_platforms_is_universal(tmp_path: Path) -> None:
+    d = write_skill(
+        tmp_path,
+        "s",
+        "platforms: [cursor, opencode, codex]\nname: s\ndescription: d",
+    )
+    assert parse_skill(d, tmp_path).platforms is None
+
+
+def test_parse_skill_requires_name_and_description(tmp_path: Path) -> None:
+    d = write_skill(tmp_path, "s", "name: s")
+    with pytest.raises(ValueError, match="description"):
+        parse_skill(d, tmp_path)
+    d2 = write_skill(tmp_path, "s2", "description: d")
+    with pytest.raises(ValueError, match="'name'"):
+        parse_skill(d2, tmp_path)
+
+
+def test_parse_skill_extra_keys_allowed(tmp_path: Path) -> None:
+    d = write_skill(
+        tmp_path, "s", 'name: s\ndescription: d\nlicense: MIT\ncompatibility: "x"'
+    )
+    assert parse_skill(d, tmp_path).name == "s"
+
+
+def test_parse_skill_name_mismatch_uses_dir(tmp_path: Path) -> None:
+    d = write_skill(tmp_path, "dir-name", "name: other\ndescription: d")
+    assert parse_skill(d, tmp_path).name == "dir-name"
+
+
+def test_load_skills_skips_dirs_without_skill_md(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    write_skill(skills_dir, "good", "name: good\ndescription: d")
+    (skills_dir / "empty").mkdir()
+    (skills_dir / "_draft").mkdir()
+    skills = load_skills(skills_dir, tmp_path)
+    assert [s.name for s in skills] == ["good"]
+
+
+def test_load_skills_missing_dir_returns_empty(tmp_path: Path) -> None:
+    assert load_skills(tmp_path / "nope", tmp_path) == []
+
+
+def test_sync_skill_links_universal_and_tagged(tmp_path: Path) -> None:
+    src = tmp_path / "skills"
+    src.mkdir()
+    write_skill(src, "uni", "name: uni\ndescription: d")
+    write_skill(src, "cx", "platforms: [codex]\nname: cx\ndescription: d")
+    skills = load_skills(src, tmp_path)
+
+    shared = tmp_path / "shared"
+    created, _, _ = sync_skill_links(skills, shared, platform=None)
+    assert created == 1
+    assert (shared / "uni").is_symlink()
+
+    codex_dir = tmp_path / "codex"
+    created, _, _ = sync_skill_links(skills, codex_dir, platform="codex")
+    assert created == 1
+    assert (codex_dir / "cx").is_symlink()
+    assert not (codex_dir / "uni").exists()
+
+
+def test_sync_skill_links_prunes_and_keeps_regular_dirs(tmp_path: Path) -> None:
+    src = tmp_path / "skills"
+    src.mkdir()
+    write_skill(src, "uni", "name: uni\ndescription: d")
+    skills = load_skills(src, tmp_path)
+
+    target = tmp_path / "target"
+    target.mkdir()
+    stale = target / "gone"
+    stale.symlink_to(src / "uni", target_is_directory=True)
+    regular = target / "user-dir"
+    regular.mkdir()
+
+    created, kept, pruned = sync_skill_links(skills, target, platform=None)
+    assert (target / "uni").is_symlink()
+    assert not stale.exists() or stale == target / "uni"
+    assert regular.is_dir() and not regular.is_symlink()
+    assert pruned == 1
+    assert created == 1
+    assert kept == 0
+
+
+def test_config_skill_dirs_disabled_platform(tmp_path: Path) -> None:
+    (tmp_path / "dotagents.toml").write_text(
+        '[platforms]\nenabled = ["opencode"]\n', encoding="utf-8"
+    )
+    config = load_config(tmp_path)
+    assert config.opencode_skills_dir is not None
+    assert config.cursor_skills_dir is None
+    assert config.codex_skills_dir is None
+    assert config.agents_skills_dir is not None
+
+
+def test_run_end_to_end_skills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    repo = tmp_path / "repo"
+    rules_dir = repo / "rules"
+    rules_dir.mkdir(parents=True)
+    (rules_dir / "r.mdc").write_text(
+        "---\nalwaysApply: true\n---\n\n# R\n", encoding="utf-8"
+    )
+    skills_dir = repo / "skills"
+    skills_dir.mkdir()
+    write_skill(skills_dir, "uni", "name: uni\ndescription: d")
+    write_skill(skills_dir, "cx", "platforms: [codex]\nname: cx\ndescription: d")
+
+    home = tmp_path / "home"
+    config = CompileConfig(
+        repo_root=repo,
+        rules_dir=rules_dir,
+        skills_dir=skills_dir,
+        enabled=frozenset({"opencode", "codex"}),
+        opencode_out=repo / "autogen-opencode.md",
+        codex_out=repo / "autogen-codex.md",
+        cursor_rules_dir=None,
+        agents_skills_dir=home / ".agents" / "skills",
+        opencode_skills_dir=home / ".config" / "opencode" / "skills",
+        cursor_skills_dir=None,
+        codex_skills_dir=home / ".codex" / "skills",
+    )
+    assert run(config) == 0
+    assert (repo / "autogen-opencode.md").is_file()
+    assert (home / ".agents" / "skills" / "uni").is_symlink()
+    assert (home / ".codex" / "skills" / "cx").is_symlink()
+    assert not (home / ".config" / "opencode" / "skills").exists()

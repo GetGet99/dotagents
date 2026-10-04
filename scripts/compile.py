@@ -1,6 +1,6 @@
-"""Compile `rules/*.mdc` into per-platform AGENTS.md files and Cursor symlinks.
+"""Compile `rules/*.mdc` and `skills/*/SKILL.md` for the enabled platforms.
 
-Source of truth: `rules/*.mdc` files with YAML frontmatter::
+Source of truth for rules: `rules/*.mdc` files with YAML frontmatter::
 
     ---
     alwaysApply: true
@@ -11,6 +11,11 @@ Source of truth: `rules/*.mdc` files with YAML frontmatter::
 
     # Rule body (markdown)
 
+Source of truth for skills: `skills/<name>/SKILL.md` (Agent Skills format).
+Only ``platforms`` is interpreted (same semantics as rules: omit/empty/all
+platforms => universal); ``name`` and ``description`` are required by the
+skills spec and validated. All other frontmatter keys pass through untouched.
+
 Outputs:
 
 * ``autogen-opencode.md`` — rules where ``platforms`` is empty or contains
@@ -18,6 +23,10 @@ Outputs:
   ``AGENTS.md`` as needed).
 * Cursor (native ``.mdc`` support): symlinks in ``~/.cursor/rules/<slug>.mdc``
   pointing at the source rule, but only for rules applying to ``"cursor"``.
+* Skills (whole-directory symlinks, so nested files ride along):
+  universal skills → ``~/.agents/skills/<name>`` (shared by all agents);
+  platform-tagged skills → ``~/.config/opencode/skills/<name>``,
+  ``~/.cursor/skills/<name>``, ``~/.codex/skills/<name>`` respectively.
 
 Which platforms run is resolved by :func:`load_config` with precedence
 (low to high): built-in defaults → ``dotagents.toml`` → ``dotagents.local.toml``
@@ -66,7 +75,7 @@ FRONTMATTER_RE = re.compile(
 HEADING_RE = re.compile(r"^(?P<hashes>#{1,6})\s+(?P<text>.*)$")
 TITLE_RE = re.compile(r"^#\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
-logger = logging.getLogger("compile_rules")
+logger = logging.getLogger("compile")
 
 
 # ---------------------------------------------------------------------------
@@ -89,17 +98,33 @@ class Rule:
 
 
 @dataclass(frozen=True, slots=True)
+class Skill:
+    """A single `skills/<name>/` directory with a `SKILL.md` file."""
+
+    name: str  # directory name (filesystem reality wins over frontmatter)
+    source_dir: Path  # absolute, resolved
+    description: str | None
+    platforms: tuple[str, ...] | None  # None = universal (shared skills dir)
+
+
+@dataclass(frozen=True, slots=True)
 class CompileConfig:
     """Fully resolved configuration (paths absolute; None = disabled)."""
 
     repo_root: Path
     rules_dir: Path
+    skills_dir: Path
     enabled: frozenset[str]
     opencode_out: Path | None
     codex_out: Path | None
     cursor_rules_dir: Path | None
+    agents_skills_dir: Path  # shared; managed when universal skills exist
+    opencode_skills_dir: Path | None
+    cursor_skills_dir: Path | None
+    codex_skills_dir: Path | None
     prune_stale: bool = True
-    create_cursor_dir: bool = True
+    create_target_dirs: bool = True
+    enable_skills: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +258,82 @@ def applies_to(rule: Rule, platform: Platform) -> bool:
     if rule.platforms is None:
         return True
     return platform in rule.platforms
+
+
+def parse_skill_frontmatter(text: str, path: Path) -> dict[str, object]:
+    """Extract the YAML mapping from a `SKILL.md` file."""
+    match = FRONTMATTER_RE.match(text)
+    if match is None:
+        raise ValueError(f"{path}: missing YAML frontmatter (expected --- fences)")
+    loaded: object = yaml.safe_load(match.group("fm"))
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path}: frontmatter must be a YAML mapping")
+    return {str(k): v for k, v in loaded.items()}
+
+
+def parse_skill(skill_dir: Path, repo_root: Path) -> Skill:
+    """Parse one `skills/<name>/` directory into a :class:`Skill`."""
+    path = skill_dir / "SKILL.md"
+    if not path.is_file():
+        raise ValueError(f"{skill_dir}: missing SKILL.md")
+    fm = parse_skill_frontmatter(path.read_text(encoding="utf-8"), path)
+
+    name_raw: object = fm.get("name")
+    if not isinstance(name_raw, str) or not name_raw.strip():
+        raise ValueError(f"{path}: 'name' must be a non-empty string")
+    if name_raw.strip() != skill_dir.name:
+        logger.warning(
+            "%s: frontmatter name %r != directory name %r; using directory name",
+            path,
+            name_raw.strip(),
+            skill_dir.name,
+        )
+
+    desc_raw: object = fm.get("description")
+    if not isinstance(desc_raw, str) or not desc_raw.strip():
+        raise ValueError(f"{path}: 'description' must be a non-empty string")
+
+    platforms = normalize_platforms(fm.get("platforms"), path)
+    if platforms is not None and frozenset(platforms) >= SUPPORTED_PLATFORMS:
+        platforms = None  # explicitly-all == universal (shared skills dir)
+
+    try:
+        source_dir = skill_dir.resolve()
+    except OSError:
+        source_dir = skill_dir.absolute()
+
+    _ = repo_root  # reserved for future repo-relative pointer rendering
+    return Skill(
+        name=skill_dir.name,
+        source_dir=source_dir,
+        description=desc_raw.strip(),
+        platforms=platforms,
+    )
+
+
+def load_skills(skills_dir: Path, repo_root: Path) -> list[Skill]:
+    """Load and alphabetically sort all `skills/*/SKILL.md` skills."""
+    if not skills_dir.is_dir():
+        logger.warning("skills directory not found, skipping skills: %s", skills_dir)
+        return []
+    skills: list[Skill] = []
+    for entry in sorted(skills_dir.iterdir()):
+        if not entry.is_dir() or entry.name.startswith((".", "_")):
+            continue
+        if not (entry / "SKILL.md").is_file():
+            logger.warning("skipping %s: no SKILL.md", entry)
+            continue
+        skills.append(parse_skill(entry, repo_root))
+    if not skills:
+        logger.warning("no skills found in %s", skills_dir)
+    return skills
+
+
+def skill_applies_to(skill: Skill, platform: Platform) -> bool:
+    """Return True when a skill should be linked into ``platform``'s dir."""
+    if skill.platforms is None:
+        return False  # universal skills live in the shared dir, not here
+    return platform in skill.platforms
 
 
 # ---------------------------------------------------------------------------
@@ -384,10 +485,16 @@ def load_config(
     *,
     cli_platforms: str | None = None,
     cli_rules_dir: Path | None = None,
+    cli_skills_dir: Path | None = None,
     cli_opencode_out: Path | None = None,
     cli_codex_out: Path | None = None,
     cli_cursor_rules_dir: Path | None = None,
+    cli_agents_skills_dir: Path | None = None,
+    cli_opencode_skills_dir: Path | None = None,
+    cli_cursor_skills_dir: Path | None = None,
+    cli_codex_skills_dir: Path | None = None,
     cli_no_cursor: bool = False,
+    cli_no_skills: bool = False,
 ) -> CompileConfig:
     """Resolve configuration with documented precedence.
 
@@ -462,22 +569,71 @@ def load_config(
             raw = str(cli_cursor_rules_dir)
         cursor_rules_dir = _resolve_path(raw, str(raw))
 
-    prune_raw: object = behavior_cfg.get("prune_stale_cursor_symlinks", True)
+    skills_dir = _resolve_path(paths_cfg.get("skills_dir", "skills"), "skills")
+    env_skills = os.environ.get("DOTAGENTS_SKILLS_DIR")
+    if env_skills:
+        skills_dir = _resolve_path(env_skills, env_skills)
+    if cli_skills_dir is not None:
+        p = cli_skills_dir.expanduser()
+        skills_dir = p if p.is_absolute() else repo_root / p
+
+    agents_default: object = paths_cfg.get("agents_skills_dir", "~/.agents/skills")
+    env_agents_skills = os.environ.get("DOTAGENTS_AGENTS_SKILLS_DIR")
+    agents_raw: object = env_agents_skills if env_agents_skills else agents_default
+    if cli_agents_skills_dir is not None:
+        agents_raw = str(cli_agents_skills_dir)
+    agents_skills_dir = _resolve_path(agents_raw, str(agents_raw))
+
+    skill_dir_defaults: dict[str, str] = {
+        "opencode": "~/.config/opencode/skills",
+        "cursor": "~/.cursor/skills",
+        "codex": "~/.codex/skills",
+    }
+    skill_dir_env: dict[str, str | None] = {
+        "opencode": os.environ.get("DOTAGENTS_OPENCODE_SKILLS_DIR"),
+        "cursor": os.environ.get("DOTAGENTS_CURSOR_SKILLS_DIR"),
+        "codex": os.environ.get("DOTAGENTS_CODEX_SKILLS_DIR"),
+    }
+    skill_dir_cli: dict[str, Path | None] = {
+        "opencode": cli_opencode_skills_dir,
+        "cursor": cli_cursor_skills_dir,
+        "codex": cli_codex_skills_dir,
+    }
+    platform_skill_dirs: dict[str, Path | None] = {}
+    for plat, default in skill_dir_defaults.items():
+        if plat not in enabled:
+            platform_skill_dirs[plat] = None
+            continue
+        cfg_key = f"{plat}_skills_dir"
+        plat_raw: object = (
+            skill_dir_env[plat] if skill_dir_env[plat] else paths_cfg.get(cfg_key, default)
+        )
+        if skill_dir_cli[plat] is not None:
+            plat_raw = str(skill_dir_cli[plat])
+        platform_skill_dirs[plat] = _resolve_path(plat_raw, str(plat_raw))
+
+    prune_raw: object = behavior_cfg.get("prune_stale_symlinks", True)
     if not isinstance(prune_raw, bool):
-        raise ValueError("[behavior] prune_stale_cursor_symlinks must be a boolean")
-    create_raw: object = behavior_cfg.get("create_cursor_dir", True)
+        raise ValueError("[behavior] prune_stale_symlinks must be a boolean")
+    create_raw: object = behavior_cfg.get("create_target_dirs", True)
     if not isinstance(create_raw, bool):
-        raise ValueError("[behavior] create_cursor_dir must be a boolean")
+        raise ValueError("[behavior] create_target_dirs must be a boolean")
 
     return CompileConfig(
         repo_root=repo_root,
         rules_dir=rules_dir,
+        skills_dir=skills_dir,
         enabled=enabled,
         opencode_out=opencode_out,
         codex_out=codex_out,
         cursor_rules_dir=cursor_rules_dir,
+        agents_skills_dir=agents_skills_dir,
+        opencode_skills_dir=platform_skill_dirs["opencode"],
+        cursor_skills_dir=platform_skill_dirs["cursor"],
+        codex_skills_dir=platform_skill_dirs["codex"],
         prune_stale=prune_raw,
-        create_cursor_dir=create_raw,
+        create_target_dirs=create_raw,
+        enable_skills=not cli_no_skills,
     )
 
 
@@ -503,48 +659,47 @@ def write_if_changed(path: Path, content: str, *, dry_run: bool = False) -> bool
     return True
 
 
-def sync_cursor_symlinks(
-    rules: Sequence[Rule],
-    cursor_dir: Path,
+def sync_link_dir(
+    expected: dict[str, Path],
+    target_dir: Path,
     *,
+    kind: str,
+    empty_message: str,
+    suffix: str | None = None,
     dry_run: bool = False,
     prune_stale: bool = True,
     create_dir: bool = True,
 ) -> tuple[int, int, int]:
-    """Sync ``cursor_dir`` symlinks; return ``(created, kept, pruned)``.
+    """Sync ``target_dir`` to contain symlinks for ``expected``.
 
-    Only symlinks are ever removed — regular files are left alone and merely
-    logged. The directory itself is only created when at least one rule
-    applies to Cursor.
+    Returns ``(created, kept, pruned)``. Only symlinks are ever removed —
+    regular files/directories are left alone and merely logged. The directory
+    itself is only created when ``expected`` is non-empty.
     """
-    expected: dict[str, Path] = {
-        f"{r.slug}.mdc": r.source_path for r in rules if applies_to(r, "cursor")
-    }
     created = kept = pruned = 0
 
     if not expected:
-        logger.info("no cursor-applicable rules; leaving %s untouched", cursor_dir)
+        logger.info("%s; leaving %s untouched", empty_message, target_dir)
         return (0, 0, 0)
 
-    if not cursor_dir.exists():
+    if not target_dir.exists():
         if dry_run:
-            logger.info("would create directory %s", cursor_dir)
+            logger.info("would create directory %s", target_dir)
             return (0, 0, 0)
         if not create_dir:
             logger.warning(
-                "cursor rules dir %s missing and create_cursor_dir=false; "
-                "skipping symlink creation",
-                cursor_dir,
+                "%s missing and create_target_dirs=false; skipping %s links",
+                target_dir,
+                kind,
             )
             return (0, 0, 0)
-        else:
-            cursor_dir.mkdir(parents=True, exist_ok=True)
-            logger.info("created directory %s", cursor_dir)
-    elif not cursor_dir.is_dir():
-        raise ValueError(f"cursor rules path is not a directory: {cursor_dir}")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("created directory %s", target_dir)
+    elif not target_dir.is_dir():
+        raise ValueError(f"target path is not a directory: {target_dir}")
 
     for name, target in sorted(expected.items()):
-        link = cursor_dir / name
+        link = target_dir / name
         if link.is_symlink():
             try:
                 if link.resolve() == target.resolve():
@@ -557,7 +712,7 @@ def sync_cursor_symlinks(
                 logger.info("would update symlink %s -> %s", link, target)
             else:
                 link.unlink()
-                link.symlink_to(target)
+                link.symlink_to(target, target_is_directory=target.is_dir())
                 logger.info("updated symlink %s -> %s", link, target)
             created += 1
         elif link.exists():
@@ -566,13 +721,15 @@ def sync_cursor_symlinks(
             if dry_run:
                 logger.info("would link %s -> %s", link, target)
             else:
-                link.symlink_to(target)
+                link.symlink_to(target, target_is_directory=target.is_dir())
                 logger.info("linked %s -> %s", link, target)
             created += 1
 
     if prune_stale:
-        for entry in sorted(cursor_dir.iterdir()):
-            if entry.name.endswith(".mdc") and entry.name not in expected:
+        for entry in sorted(target_dir.iterdir()):
+            if suffix is not None and not entry.name.endswith(suffix):
+                continue
+            if entry.name not in expected:
                 if entry.is_symlink():
                     if dry_run:
                         logger.info("would prune stale symlink %s", entry)
@@ -586,6 +743,62 @@ def sync_cursor_symlinks(
     return (created, kept, pruned)
 
 
+def sync_cursor_symlinks(
+    rules: Sequence[Rule],
+    cursor_dir: Path,
+    *,
+    dry_run: bool = False,
+    prune_stale: bool = True,
+    create_dir: bool = True,
+) -> tuple[int, int, int]:
+    """Sync ``cursor_dir`` rule symlinks; return ``(created, kept, pruned)``."""
+    expected: dict[str, Path] = {
+        f"{r.slug}.mdc": r.source_path for r in rules if applies_to(r, "cursor")
+    }
+    return sync_link_dir(
+        expected,
+        cursor_dir,
+        kind="cursor rule",
+        empty_message="no cursor-applicable rules",
+        suffix=".mdc",
+        dry_run=dry_run,
+        prune_stale=prune_stale,
+        create_dir=create_dir,
+    )
+
+
+def sync_skill_links(
+    skills: Sequence[Skill],
+    target_dir: Path,
+    *,
+    platform: Platform | None,
+    dry_run: bool = False,
+    prune_stale: bool = True,
+    create_dir: bool = True,
+) -> tuple[int, int, int]:
+    """Sync skill directory symlinks; return ``(created, kept, pruned)``.
+
+    ``platform=None`` selects universal skills (shared dir); otherwise only
+    skills explicitly tagged with that platform.
+    """
+    if platform is None:
+        selected = [s for s in skills if s.platforms is None]
+        empty_message = "no universal skills"
+    else:
+        selected = [s for s in skills if skill_applies_to(s, platform)]
+        empty_message = f"no {platform}-tagged skills"
+    expected: dict[str, Path] = {s.name: s.source_dir for s in selected}
+    return sync_link_dir(
+        expected,
+        target_dir,
+        kind="skill",
+        empty_message=empty_message,
+        dry_run=dry_run,
+        prune_stale=prune_stale,
+        create_dir=create_dir,
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -593,7 +806,10 @@ def sync_cursor_symlinks(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compile rules/*.mdc into AGENTS.md files and Cursor symlinks."
+        description=(
+            "Compile rules/*.mdc into autogen files + Cursor symlinks, "
+            "and link skills/*/ into agent skills dirs."
+        )
     )
     parser.add_argument(
         "--repo-root",
@@ -602,9 +818,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="repository root (holds dotagents.toml and default outputs)",
     )
     parser.add_argument("--rules-dir", type=Path, default=None)
+    parser.add_argument("--skills-dir", type=Path, default=None)
     parser.add_argument("--opencode-out", type=Path, default=None)
     parser.add_argument("--codex-out", type=Path, default=None)
     parser.add_argument("--cursor-rules-dir", type=Path, default=None)
+    parser.add_argument("--agents-skills-dir", type=Path, default=None)
+    parser.add_argument("--opencode-skills-dir", type=Path, default=None)
+    parser.add_argument("--cursor-skills-dir", type=Path, default=None)
+    parser.add_argument("--codex-skills-dir", type=Path, default=None)
     parser.add_argument(
         "--platform",
         default=None,
@@ -612,6 +833,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--no-cursor", action="store_true", help="skip cursor symlink management"
+    )
+    parser.add_argument(
+        "--no-skills", action="store_true", help="skip skills symlink management"
     )
     parser.add_argument(
         "--check",
@@ -655,15 +879,46 @@ def run(config: CompileConfig, *, check: bool = False, dry_run: bool = False) ->
             changed = True
 
     if config.cursor_rules_dir is None:
-        logger.info("skipped cursor (disabled)")
+        logger.info("skipped cursor rules (disabled)")
     else:
         sync_cursor_symlinks(
             rules,
             config.cursor_rules_dir,
             dry_run=effective_dry,
             prune_stale=config.prune_stale,
-            create_dir=config.create_cursor_dir,
+            create_dir=config.create_target_dirs,
         )
+
+    if not config.enable_skills:
+        logger.info("skipped skills (--no-skills)")
+    else:
+        skills = load_skills(config.skills_dir, config.repo_root)
+        logger.info("loaded %d skill(s) from %s", len(skills), config.skills_dir)
+        sync_skill_links(
+            skills,
+            config.agents_skills_dir,
+            platform=None,
+            dry_run=effective_dry,
+            prune_stale=config.prune_stale,
+            create_dir=config.create_target_dirs,
+        )
+        skill_targets: list[tuple[str, Path | None, Platform]] = [
+            ("opencode", config.opencode_skills_dir, "opencode"),
+            ("cursor", config.cursor_skills_dir, "cursor"),
+            ("codex", config.codex_skills_dir, "codex"),
+        ]
+        for name, target_dir, platform in skill_targets:
+            if target_dir is None:
+                logger.info("skipped %s skills (disabled)", name)
+                continue
+            sync_skill_links(
+                skills,
+                target_dir,
+                platform=platform,
+                dry_run=effective_dry,
+                prune_stale=config.prune_stale,
+                create_dir=config.create_target_dirs,
+            )
 
     if check and changed:
         return 1
@@ -683,10 +938,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             repo_root,
             cli_platforms=args.platform,
             cli_rules_dir=args.rules_dir,
+            cli_skills_dir=args.skills_dir,
             cli_opencode_out=args.opencode_out,
             cli_codex_out=args.codex_out,
             cli_cursor_rules_dir=args.cursor_rules_dir,
+            cli_agents_skills_dir=args.agents_skills_dir,
+            cli_opencode_skills_dir=args.opencode_skills_dir,
+            cli_cursor_skills_dir=args.cursor_skills_dir,
+            cli_codex_skills_dir=args.codex_skills_dir,
             cli_no_cursor=args.no_cursor,
+            cli_no_skills=args.no_skills,
         )
         return run(config, check=args.check, dry_run=args.dry_run)
     except ValueError as exc:

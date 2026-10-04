@@ -1,4 +1,4 @@
-# Team defaults for scripts/compile_rules.py (checked in).
+# Team defaults for scripts/compile.py (checked in).
 # Copy to dotagents.local.toml (gitignored) for per-machine overrides.
 # Precedence: defaults < dotagents.toml < dotagents.local.toml
 #            < DOTAGENTS_* env vars < CLI flags.
@@ -10,12 +10,19 @@ enabled = ["cursor", "opencode", "codex"]
 
 [paths]
 rules_dir = "rules"
+skills_dir = "skills"
 opencode_out = "autogen-opencode.md"
 codex_out = "autogen-codex.md"
 # Only used when "cursor" is enabled; never created otherwise.
 cursor_rules_dir = "~/.cursor/rules"
+# Universal skills (no platforms tag) go here; shared by all agents.
+agents_skills_dir = "~/.agents/skills"
+# Platform-tagged skills go here (each only when that platform is enabled).
+opencode_skills_dir = "~/.config/opencode/skills"
+cursor_skills_dir = "~/.cursor/skills"
+codex_skills_dir = "~/.codex/skills"
 
 [behavior]
-prune_stale_cursor_symlinks = true
-# When false, a missing cursor dir only warns instead of being created.
-create_cursor_dir = true
+prune_stale_symlinks = true
+# When false, a missing target dir only warns instead of being created.
+create_target_dirs = true
