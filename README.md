@@ -9,9 +9,14 @@ Skills: `skills/*/SKILL.md`
 ## Compiling
 
 ```bash
-pip install -r scripts/requirements.txt
+pip install -r scripts/requirements.txt # install requirements
+
+# Compile and use
 ./compile.sh
+# or
 python scripts/compile.py
+
+# additional args
 python scripts/compile.py --check
 python scripts/compile.py --dry-run -v
 ```
