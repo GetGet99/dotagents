@@ -231,7 +231,10 @@ def test_disabled_platform_touches_nothing(tmp_path: Path) -> None:
     assert config.cursor_rules_dir is None
 
 
-def test_load_config_defaults_to_all(tmp_path: Path) -> None:
+def test_load_config_defaults_to_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
     config = load_config(tmp_path)
     assert config.enabled == frozenset({"cursor", "opencode", "codex"})
     assert config.opencode_out is not None
