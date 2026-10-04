@@ -1,0 +1,17 @@
+---
+platform:
+- cursor
+alwaysApply: true
+---
+
+# Avoid head, tail, and grep on build, test, or lint outputs
+
+When output is big enough, Cursor automatically writes the output to a file, which you can later use those tools or shell commands to inspect the output.
+
+## Why head/tail/grep on tool output is bad?
+
+Most of the time that I observed, the output given is too small to diagnose the issue such that the only way to get the proper output is to rerun the build, test, or lint commands. This causes the wait time to be doubled or even more, rather than just wait for output once and good to go.
+
+## What to do instead?
+
+Just run the command without piping into grep, head, tail.
