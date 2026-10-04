@@ -1,0 +1,30 @@
+---
+alwaysApply: true
+---
+
+# No Code Comments — Codebase Is the Source of Truth
+
+Do NOT add code comments. The codebase itself must be the source of truth.
+
+This applies to all languages and all comment syntaxes (`//`, `/* */`, `#`, `<!-- -->`, `;`, `--`, XML doc comments, JSDoc/TSDoc, etc.) in all new or modified code. If you feel the urge to write a comment to explain code, refactor the code instead to make it self-explanatory: use descriptive names, extract small well-named functions, simplify logic, or make types explicit.
+
+## Rationale
+
+- Comments get out of date quickly and then actively mislead other agents and humans who read them.
+- Stale or contradictory comments cause more confusion than no comments at all.
+- Readable, well-structured code does not need narration.
+
+## Exceptions
+
+Only these two cases allow comments, and nothing else does:
+
+1. **Public API documentation for libraries or API endpoints only**
+   - Allowed only for truly public surfaces: exported library APIs, public SDKs, or external API endpoints (e.g. OpenAPI descriptions, public package docstrings).
+   - Do NOT document private functions, internal helpers, or anything only used within the same codebase.
+   - Keep it minimal, factual, and focused on contract/usage, not implementation details.
+
+2. **Functional directives that only a comment can express**
+   - e.g. lint/format suppressions (`eslint-disable-next-line`, `cspell:disable`, `# noqa`, `// NOLINT`, `#pragma`, `//go:generate`, etc.) or tooling directives that affect behavior.
+   - Only use this if you *really* need to. Do not disable lints by default — fix the underlying issue instead. If a suppression is unavoidable, keep it tightly scoped and do not add extra explanation beyond what the directive itself requires.
+
+
