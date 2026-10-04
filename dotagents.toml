@@ -1,0 +1,21 @@
+# Team defaults for scripts/compile_rules.py (checked in).
+# Copy to dotagents.local.toml (gitignored) for per-machine overrides.
+# Precedence: defaults < dotagents.toml < dotagents.local.toml
+#            < DOTAGENTS_* env vars < CLI flags.
+
+[platforms]
+# Subset of "cursor" | "opencode" | "codex". Omit or set to [] for all.
+# Example for a machine without Cursor: enabled = ["opencode", "codex"]
+enabled = ["cursor", "opencode", "codex"]
+
+[paths]
+rules_dir = "rules"
+opencode_out = "autogen-opencode.md"
+codex_out = "autogen-codex.md"
+# Only used when "cursor" is enabled; never created otherwise.
+cursor_rules_dir = "~/.cursor/rules"
+
+[behavior]
+prune_stale_cursor_symlinks = true
+# When false, a missing cursor dir only warns instead of being created.
+create_cursor_dir = true

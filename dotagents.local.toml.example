@@ -1,0 +1,8 @@
+# Local per-machine override for dotagents.toml (gitignored).
+# Uncomment and adjust as needed.
+#
+# [platforms]
+# enabled = ["opencode"]
+#
+# [paths]
+# cursor_rules_dir = "~/.cursor/rules"
