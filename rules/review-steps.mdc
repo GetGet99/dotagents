@@ -1,0 +1,26 @@
+---
+alwaysApply: true
+---
+
+# Code Review steps
+
+Every work you do will be reviewed by user and sometimes also other agents. Because we all don't want new bugs to show up in the codebase and we want things to be maintainable and want to prevent as much as we can.
+
+As a user, I can go and read files one by one, as shown in the source control, but the research suggests that reviewing files alphabetically (which is what most source control shows order by default), which is not really aligned with how developers work cognitively, and makes review less effective.
+
+## After you finish implementing and before returning to the user
+
+I want you to propose me a Code Review steps by giving files (and potential line numbers if repeated multiple times) in the order of startup (ie. configuration), to entry points, to inner functionalities.
+
+ie. (for example)
+
+1. `config.json` - new configuration changed
+2. `Routes.cs` - add a new route
+3. `MyService.cs` - route calls into my service
+...
+
+If your work is both backend and frontend, I want backend first then frontend. Although the entry point is frontend, backend API design is worth reviewing more and get right.
+
+## When other instructions ask you to ask for code review from other agents
+
+If possible, also provide the review steps like above. Would benefit the agents to be able to give better reviews
