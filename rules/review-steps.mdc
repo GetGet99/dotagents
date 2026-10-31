@@ -6,7 +6,7 @@ alwaysApply: true
 
 Every work you do will be reviewed by user and sometimes also other agents. Because we all don't want new bugs to show up in the codebase and we want things to be maintainable and want to prevent as much as we can.
 
-As a user, I can go and read files one by one, as shown in the source control, but the research suggests that reviewing files alphabetically (which is what most source control shows order by default), which is not really aligned with how developers work cognitively, and makes review less effective.
+As a user, I can go and read files one by one, as shown in the source control, but the research suggests that reviewing files alphabetically (which is what most source control shows order by default) is not really aligned with how developers work cognitively, and makes review less effective.
 
 ## After you finish implementing and before returning to the user
 
