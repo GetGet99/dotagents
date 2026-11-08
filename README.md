@@ -1,13 +1,9 @@
 # dotagents
 
-Manage agent rules and skills across multiple harnesses from one or more
-content sources. A source is a directory containing:
+Rules and skills manager
 
-```
-my-agent-content/
-  rules/*.mdc
-  skills/<name>/SKILL.md
-```
+Declare rules and skills once. Works for multiple harnesses
+
 
 ## Install
 
@@ -22,13 +18,35 @@ This provides the `dotagents` command.
 
 ## Use
 
+Create your folders of skills and rules:
+
+```
+my-agent-content/
+  rules/*.mdc
+  skills/<name>/SKILL.md
+```
+
+Then run
+
 ```sh
-dotagents source add ~/Codes/agent-content   # register a source
-dotagents source add ~/Codes/agent-content-2 # multiple sources
+dotagents harness enable cursor
+dotagents harness enable codex
+dotagents harness enable opencode
+dotagents source add path/to/my-agent-content
+dotagents build
+```
+
+All your coding agents get the same skills and rules. `*.mdc` files are converted to AGENTS.md format for harness not supporting `*.mdc` files.
+
+## Commands
+
+```sh
+dotagents source add path/to/my-agent-content # register a source
+dotagents source add path/to/agent-content-2  # multiple sources OK
 dotagents source list
-dotagents harness enable opencode            # built-ins start disabled
-dotagents build                              # generate files + symlinks
-dotagents build --check                      # CI: fail if outputs differ
+dotagents harness enable opencode             # built-ins start disabled
+dotagents build                               # generate files + symlinks
+dotagents build --check                       # CI: fail if outputs differ
 dotagents source remove ~/Codes/agent-content-2
 ```
 
