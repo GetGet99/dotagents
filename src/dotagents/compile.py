@@ -1,7 +1,8 @@
 """Compile rules and skills from one or more sources for enabled harnesses.
 
 A source is a directory containing ``rules/*.mdc`` and/or
-``skills/<name>/SKILL.md``. Sources are registered with
+``skills/<name>/SKILL.md`` (which may be nested any depth under ``skills/``).
+Sources are registered with
 ``dotagents source add`` and read from the per-user config directory (see
 :mod:`dotagents.config`).
 
@@ -16,7 +17,8 @@ Source of truth for rules: `rules/*.mdc` files with YAML frontmatter::
 
     # Rule body (markdown)
 
-Source of truth for skills: `skills/<name>/SKILL.md` (Agent Skills format).
+Source of truth for skills: `skills/<name>/SKILL.md` (Agent Skills format),
+where the skill directory may be nested any depth under ``skills/``.
 Only ``platforms`` is interpreted (same semantics as rules); ``name`` and
 ``description`` are required by the skills spec and validated. All other
 frontmatter keys pass through untouched.
@@ -48,7 +50,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -335,6 +337,27 @@ def parse_skill(skill_dir: Path) -> Skill:
     )
 
 
+def iter_skill_dirs(skills_dir: Path) -> Iterator[Path]:
+    """Yield every directory under ``skills_dir`` that contains a ``SKILL.md``.
+
+    Skills may nest arbitrarily deep below ``skills/``; any directory with a
+    ``SKILL.md`` is treated as a skill. Intermediate grouping directories
+    without a ``SKILL.md`` are traversed but not yielded. Siblings are visited
+    breadth-first in alphabetical order, so a flat layout yields exactly the
+    same order as before nesting was supported.
+    """
+    queue: list[Path] = [skills_dir]
+    while queue:
+        directory = queue.pop(0)
+        for entry in sorted(directory.iterdir()):
+            if not entry.is_dir() or entry.name.startswith((".", "_")):
+                continue
+            if (entry / "SKILL.md").is_file():
+                yield entry
+            else:
+                queue.append(entry)
+
+
 def load_skills(sources: Sequence[Source]) -> list[Skill]:
     """Load skills from every source, rejecting duplicate names."""
     by_name: dict[str, Skill] = {}
@@ -345,13 +368,8 @@ def load_skills(sources: Sequence[Source]) -> list[Skill]:
             logger.debug("source has no skills directory: %s", source.path)
             continue
         seen_skills_dir = True
-        for entry in sorted(skills_dir.iterdir()):
-            if not entry.is_dir() or entry.name.startswith((".", "_")):
-                continue
-            if not (entry / "SKILL.md").is_file():
-                logger.warning("skipping %s: no SKILL.md", entry)
-                continue
-            skill = parse_skill(entry)
+        for skill_dir in iter_skill_dirs(skills_dir):
+            skill = parse_skill(skill_dir)
             existing = by_name.get(skill.name)
             if existing is not None:
                 raise ValueError(
@@ -378,15 +396,11 @@ def scan_source_names(source: Source) -> tuple[list[str], list[str]]:
         if source.rules_dir.is_dir()
         else []
     )
-    names: list[str] = []
-    if source.skills_dir.is_dir():
-        for entry in sorted(source.skills_dir.iterdir()):
-            if (
-                entry.is_dir()
-                and not entry.name.startswith((".", "_"))
-                and (entry / "SKILL.md").is_file()
-            ):
-                names.append(entry.name)
+    names = (
+        [d.name for d in iter_skill_dirs(source.skills_dir)]
+        if source.skills_dir.is_dir()
+        else []
+    )
     return slugs, names
 
 

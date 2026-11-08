@@ -24,6 +24,7 @@ from dotagents.compile import (
     prune_harness_artifacts,
     render_agents_md,
     run,
+    scan_source_names,
     skill_applies_to,
     sync_mdc_rule_links,
     sync_single_rule,
@@ -472,6 +473,37 @@ def test_load_skills_skips_dirs_without_skill_md(tmp_path: Path) -> None:
     (skills_dir / "_draft").mkdir()
     skills = load_skills([make_source(tmp_path)])
     assert [s.name for s in skills] == ["good"]
+
+
+def test_load_skills_discovers_nested_skills(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    write_skill(skills_dir, "top", "name: top\ndescription: d")
+    write_skill(
+        skills_dir / "group",
+        "nested",
+        "name: nested\ndescription: d",
+    )
+    write_skill(
+        skills_dir / "group" / "sub",
+        "deep",
+        "name: deep\ndescription: d",
+    )
+    (skills_dir / "group" / "no-skill").mkdir()
+    skills = load_skills([make_source(tmp_path)])
+    assert [s.name for s in skills] == ["top", "nested", "deep"]
+    assert {s.source_dir.name for s in skills} == {"top", "nested", "deep"}
+
+
+def test_scan_source_names_includes_nested_skills(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    write_skill(skills_dir, "top", "name: top\ndescription: d")
+    write_skill(
+        skills_dir / "group",
+        "nested",
+        "name: nested\ndescription: d",
+    )
+    _, names = scan_source_names(make_source(tmp_path))
+    assert names == ["top", "nested"]
 
 
 def test_load_skills_merges_sources_and_rejects_duplicates(tmp_path: Path) -> None:
