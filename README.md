@@ -24,12 +24,12 @@ This provides the `dotagents` command.
 
 ```sh
 dotagents source add ~/Codes/agent-content   # register a source
-dotagents source add ~/Codes/agent-content-2 # multiple sources are fine
+dotagents source add ~/Codes/agent-content-2 # multiple sources
 dotagents source list
 dotagents harness enable opencode            # built-ins start disabled
 dotagents build                              # generate files + symlinks
 dotagents build --check                      # CI: fail if outputs differ
-dotagents source remove ~/Codes/agent-content-work
+dotagents source remove ~/Codes/agent-content-2
 ```
 
 `dotagents build --source DIR` uses a one-off source instead of the registered
@@ -62,15 +62,6 @@ dotagents harness add claude \
   --rule-file-name CLAUDE.md
 ```
 
-A custom harness needs:
-
-* `name` — letters, digits, `-`, `_`
-* `target_dir` — e.g. `~/.claude`
-* `rule_style` — `mdc` (symlink individual rules) or `single` (one rule file)
-* `rule_file_name` — defaults to `AGENTS.md` (only used for `single`)
-
-Built-ins cannot be removed; disable them instead.
-
 ### Built-in catalog
 
 | name | target | rule style | rule file |
@@ -79,22 +70,7 @@ Built-ins cannot be removed; disable them instead.
 | opencode | `~/.config/opencode` | `single` | `AGENTS.md` |
 | codex | `~/.codex` | `single` | `AGENTS.md` |
 
-### Harness settings
-
-Harness state lives at
-`${XDG_CONFIG_HOME:-~/.config}/dotagents/harnesses.toml`. Built-in entries only
-need the fields they override; custom entries are written in full:
-
-```toml
-[cursor]
-enabled = false
-
-[claude]
-enabled = true
-target_dir = "/home/me/.claude"
-rule_style = "single"
-rule_file_name = "CLAUDE.md"
-```
+Built-ins cannot be removed; disable them instead.
 
 ## Outputs
 
@@ -119,8 +95,7 @@ Sources are stored per machine at
 `${XDG_CONFIG_HOME:-~/.config}/dotagents/sources` (one absolute path per line).
 `DOTAGENTS_CONFIG_DIR` overrides the whole config directory.
 
-Missing sources are skipped with a warning, so a work-only source does not
-break builds on a personal machine. Duplicate rule slugs or skill names across
+Missing sources are skipped with a warning. Duplicate rule slugs or skill names across
 sources are a hard error: shared content must live in exactly one source.
 
 ### Settings
