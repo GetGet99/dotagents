@@ -1,0 +1,12 @@
+# Global dotagents settings (usually `~/.config/dotagents/config.toml`).
+# Content sources live in the adjacent `sources` file and are managed with
+# `dotagents source add` / `dotagents source remove`.
+# Harness definitions live in `harnesses.toml` and are managed with
+# `dotagents harness ...`.
+
+[build]
+output_dir = "~/.config/dotagents/build"
+
+[behavior]
+prune_stale_symlinks = true
+create_target_dirs = true

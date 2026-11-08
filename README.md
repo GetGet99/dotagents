@@ -1,0 +1,143 @@
+# dotagents
+
+Manage agent rules and skills across multiple harnesses from one or more
+content sources. A source is a directory containing:
+
+```
+my-agent-content/
+  rules/*.mdc
+  skills/<name>/SKILL.md
+```
+
+## Install
+
+Requires Python ≥ 3.11.
+
+```sh
+uv tool install --editable .
+# or: pipx install .
+```
+
+This provides the `dotagents` command.
+
+## Use
+
+```sh
+dotagents source add ~/Codes/agent-content   # register a source
+dotagents source add ~/Codes/agent-content-2 # multiple sources are fine
+dotagents source list
+dotagents harness enable opencode            # built-ins start disabled
+dotagents build                              # generate files + symlinks
+dotagents build --check                      # CI: fail if outputs differ
+dotagents source remove ~/Codes/agent-content-work
+```
+
+`dotagents build --source DIR` uses a one-off source instead of the registered
+ones. With no registered sources, `build` falls back to the current directory
+when it contains `rules/` or `skills/`.
+
+## Harnesses
+
+Built-in harnesses are `cursor`, `opencode`, and `codex`. All built-ins start
+disabled, so each machine enables only the harnesses it uses:
+
+```sh
+dotagents harness list
+dotagents harness enable codex
+dotagents harness disable cursor
+```
+
+Declare a custom harness interactively:
+
+```sh
+dotagents harness add
+```
+
+Or non-interactively:
+
+```sh
+dotagents harness add claude \
+  --target-dir ~/.claude \
+  --rule-style single \
+  --rule-file-name CLAUDE.md
+```
+
+A custom harness needs:
+
+* `name` — letters, digits, `-`, `_`
+* `target_dir` — e.g. `~/.claude`
+* `rule_style` — `mdc` (symlink individual rules) or `single` (one rule file)
+* `rule_file_name` — defaults to `AGENTS.md` (only used for `single`)
+
+Built-ins cannot be removed; disable them instead.
+
+### Built-in catalog
+
+| name | target | rule style | rule file |
+|---|---|---|---|
+| cursor | `~/.cursor` | `mdc` | `AGENTS.md` (unused) |
+| opencode | `~/.config/opencode` | `single` | `AGENTS.md` |
+| codex | `~/.codex` | `single` | `AGENTS.md` |
+
+### Harness settings
+
+Harness state lives at
+`${XDG_CONFIG_HOME:-~/.config}/dotagents/harnesses.toml`. Built-in entries only
+need the fields they override; custom entries are written in full:
+
+```toml
+[cursor]
+enabled = false
+
+[claude]
+enabled = true
+target_dir = "/home/me/.claude"
+rule_style = "single"
+rule_file_name = "CLAUDE.md"
+```
+
+## Outputs
+
+For each enabled harness, `build` writes:
+
+* `rule_style = "mdc"`: symlinks in `<target>/rules/<slug>.mdc`.
+* `rule_style = "single"`: `<output_dir>/autogen-<name>.md`, symlinked as
+  `<target>/<rule_file_name>`.
+* Skills: symlinks in `<target>/skills/<name>`. Universal skills (no
+  `platforms`) are materialized for every harness; tagged skills only for the
+  harnesses they name.
+
+`platforms` in rule and skill frontmatter accepts harness names, including
+custom ones. Omit `platforms` for content that applies everywhere.
+
+Disabled harnesses are skipped, and their managed symlinks and generated files
+are pruned on the next `build` (regular files are never touched).
+
+### Source registry
+
+Sources are stored per machine at
+`${XDG_CONFIG_HOME:-~/.config}/dotagents/sources` (one absolute path per line).
+`DOTAGENTS_CONFIG_DIR` overrides the whole config directory.
+
+Missing sources are skipped with a warning, so a work-only source does not
+break builds on a personal machine. Duplicate rule slugs or skill names across
+sources are a hard error: shared content must live in exactly one source.
+
+### Settings
+
+Optional settings live at `~/.config/dotagents/config.toml`. See
+`config.toml.example` for all keys. Precedence is:
+
+```
+built-in defaults < config.toml < DOTAGENTS_* env vars < CLI flags
+```
+
+## Development
+
+```sh
+./compile.sh --check
+PYTHONPATH=src python -m dotagents.cli --help
+pytest
+ruff check src tests
+mypy src tests
+```
